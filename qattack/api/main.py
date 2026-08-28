@@ -4,8 +4,8 @@ Quantum Security Assessment API.
 
 Persistent API layer for the Quantum Security Assessment Engine.
 
-Endpoints
----------
+Core endpoints
+--------------
 
 GET  /
 GET  /health
@@ -15,8 +15,17 @@ GET  /api/assessment/{assessment_id}
 GET  /api/assessment/{assessment_id}/report
 GET  /api/assessments
 
+AI Agent Gateway
+----------------
+
 GET  /api/agent/capabilities
 POST /api/agent/assess
+
+Website Security Assessment
+---------------------------
+
+GET  /api/website/capabilities
+POST /api/website/assessment
 
 
 Architecture
@@ -24,15 +33,15 @@ Architecture
 
 Client / AI Agent
         |
-        +----------------------+
-        |                      |
-        v                      v
-  Assessment API        Agent Gateway
-        |                      |
-        +----------+-----------+
+        +---------------------+
+        |                     |
+        v                     v
+Assessment API         Agent Gateway
+        |                     |
+        +----------+----------+
                    |
                    v
-     QuantumSecurityAssessment
+       QuantumSecurityAssessment
                    |
         +----------+----------+
         |          |          |
@@ -41,20 +50,42 @@ Client / AI Agent
     Analysis     Attack     Evidence
                    |
                    v
-             Reports
+                Reports
                    |
                    v
               SQLite
 
 
-The Agent Gateway is registered here with:
+Website Assessment
+------------------
 
-    app.include_router(
-        agent_router,
-        prefix="/api/agent",
-    )
+Authorized Website
+        |
+        v
+Website Assessment API
+        |
+        +--> HTTPS
+        +--> TLS
+        +--> Certificate
+        +--> Security Headers
+        +--> Cookies
+        +--> Page Metadata
+        |
+        v
+Structured Website Evidence
 
-The gateway itself does NOT define that prefix.
+Important
+---------
+
+The Agent Gateway owns:
+
+    /api/agent/...
+
+The Website router owns:
+
+    /api/website/...
+
+Prefixes are defined only here in this application module.
 """
 
 from __future__ import annotations
@@ -77,9 +108,20 @@ from qattack.assessment import QuantumSecurityAssessment
 from qattack.core.target import Target
 from qattack.db.database import AssessmentStore
 
+# ---------------------------------------------------------------------
 # Agent Gateway
+# ---------------------------------------------------------------------
+
 from qattack.api.agent.gateway import (
     router as agent_router,
+)
+
+# ---------------------------------------------------------------------
+# Website Security Assessment
+# ---------------------------------------------------------------------
+
+from qattack.api.website import (
+    router as website_router,
 )
 
 
@@ -93,10 +135,10 @@ app = FastAPI(
         "API-driven quantum-security assessment infrastructure "
         "for quantum attack benchmarks, measurement analysis, "
         "noise experiments, security evidence, persistent "
-        "storage, machine-readable reports, and AI-agent "
+        "storage, website security assessment, and AI-agent "
         "integration."
     ),
-    version="0.2.0",
+    version="0.4.0",
 )
 
 
@@ -118,14 +160,16 @@ STORE = AssessmentStore()
 
 
 # =====================================================================
-# AGENT GATEWAY REGISTRATION
+# ROUTER REGISTRATION
 # =====================================================================
 
-# IMPORTANT:
+# ---------------------------------------------------------------------
+# AI Agent Gateway
+# ---------------------------------------------------------------------
 #
-# gateway.py intentionally has no `/api/agent` prefix.
+# gateway.py deliberately does not define /api/agent.
 #
-# This is the single place where the prefix is defined.
+# The prefix is defined only here.
 #
 # Final routes:
 #
@@ -136,6 +180,28 @@ app.include_router(
     agent_router,
     prefix="/api/agent",
     tags=["Agent Gateway"],
+)
+
+
+# ---------------------------------------------------------------------
+# Website Assessment Gateway
+# ---------------------------------------------------------------------
+#
+# website.py deliberately defines only:
+#
+#     /website/...
+#
+# The /api prefix is defined here.
+#
+# Final routes:
+#
+#     /api/website/capabilities
+#     /api/website/assessment
+
+app.include_router(
+    website_router,
+    prefix="/api",
+    tags=["Website Security Assessment"],
 )
 
 
@@ -351,6 +417,16 @@ def root() -> dict[str, Any]:
         "storage": "sqlite",
         "assessment_count": STORE.count(),
 
+        "agent_gateway": {
+            "enabled": True,
+            "prefix": "/api/agent",
+        },
+
+        "website_assessment": {
+            "enabled": True,
+            "prefix": "/api/website",
+        },
+
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
@@ -379,6 +455,14 @@ def root() -> dict[str, Any]:
             "agent_assessment": (
                 "/api/agent/assess"
             ),
+
+            "website_capabilities": (
+                "/api/website/capabilities"
+            ),
+
+            "website_assessment": (
+                "/api/website/assessment"
+            ),
         },
     }
 
@@ -396,19 +480,35 @@ def health() -> dict[str, Any]:
 
     return {
         "status": "ok",
+
         "service": (
             "quantum-security-assessment-api"
         ),
+
         "version": app.version,
+
         "storage": "sqlite",
-        "assessment_count": STORE.count(),
-        "agent_gateway": "available",
+
+        "assessment_count": (
+            STORE.count()
+        ),
+
+        "agent_gateway": {
+            "enabled": True,
+            "prefix": "/api/agent",
+        },
+
+        "website_assessment": {
+            "enabled": True,
+            "prefix": "/api/website",
+        },
+
         "timestamp": _utc_now(),
     }
 
 
 # =====================================================================
-# CREATE ASSESSMENT
+# CREATE QUANTUM ASSESSMENT
 # =====================================================================
 
 
@@ -434,6 +534,7 @@ def create_assessment(
     assessment_id = _assessment_id()
 
     try:
+
         # -------------------------------------------------------------
         # 1. Build target
         # -------------------------------------------------------------
@@ -465,7 +566,7 @@ def create_assessment(
         )
 
         # -------------------------------------------------------------
-        # 4. Generate security evidence
+        # 4. Generate evidence
         # -------------------------------------------------------------
 
         evidence = evidence_from_result(
@@ -519,7 +620,7 @@ def create_assessment(
         }
 
         # -------------------------------------------------------------
-        # 7. Build persistent record
+        # 7. Persistent record
         # -------------------------------------------------------------
 
         record = {
@@ -558,7 +659,9 @@ def create_assessment(
         # 8. Persist
         # -------------------------------------------------------------
 
-        STORE.save(record)
+        STORE.save(
+            record
+        )
 
         # -------------------------------------------------------------
         # 9. Return
@@ -570,10 +673,13 @@ def create_assessment(
         raise
 
     except Exception as exc:
+
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "assessment_failed",
+                "error": (
+                    "assessment_failed"
+                ),
                 "message": str(exc),
                 "assessment_id": (
                     assessment_id
@@ -594,7 +700,7 @@ def get_assessment(
     assessment_id: str,
 ) -> dict[str, Any]:
     """
-    Retrieve a persisted assessment.
+    Retrieve a persisted quantum assessment.
     """
 
     return _get_record_or_404(
@@ -616,7 +722,7 @@ def get_report(
     assessment_id: str,
 ) -> HTMLResponse:
     """
-    Return the assessment as a standalone HTML report.
+    Return the quantum assessment as HTML.
     """
 
     record = _get_record_or_404(
@@ -629,6 +735,7 @@ def get_report(
     )
 
     try:
+
         html_report = (
             render_html_report(
                 evidence
@@ -636,6 +743,7 @@ def get_report(
         )
 
     except Exception as exc:
+
         raise HTTPException(
             status_code=500,
             detail={
@@ -660,13 +768,14 @@ def get_report(
 # =====================================================================
 
 
-@app.get("/api/assessments")
+@app.get(
+    "/api/assessments"
+)
 def list_assessments() -> dict[str, Any]:
     """
-    List persisted assessments.
+    List persisted quantum assessments.
 
-    Returns lightweight metadata instead of
-    complete result/evidence payloads.
+    Returns lightweight metadata.
     """
 
     items = STORE.list_all()
@@ -674,6 +783,7 @@ def list_assessments() -> dict[str, Any]:
     assessments = []
 
     for record in items:
+
         assessments.append(
             {
                 "assessment_id": (

@@ -1,53 +1,58 @@
-
 """
-Agent Gateway for Quantum Security Assessment API.
+AI Agent Gateway for Quantum Security Assessment.
 
-This module provides an AI-agent-facing interface to the
-Quantum Security Assessment Engine.
+This module exposes machine-readable tools for AI agents.
 
-Architecture
-------------
+Available agent tools
+---------------------
 
-AI Agent / External Application
-            |
-            v
-     POST /api/agent/assess
-            |
-            v
-       Agent Gateway
-            |
-            v
- QuantumSecurityAssessment
-            |
-      +-----+-----+
-      |           |
-      v           v
- Measurement   Quantum Attack
- Analysis      Benchmark
-      |           |
-      +-----+-----+
-            |
-            v
-     Security Evidence
-            |
-            v
-      Structured JSON
+GET  /api/agent/capabilities
+POST /api/agent/assess
+POST /api/agent/website-assess
 
+The gateway supports two distinct workflows:
 
-Important
----------
-The `/api/agent` URL prefix is intentionally NOT defined here.
+1. Quantum benchmark assessment
 
-It is registered centrally by `qattack/api/main.py` using:
+       Agent
+         |
+         v
+       /assess
+         |
+         v
+   QuantumSecurityAssessment
 
-    app.include_router(
-        agent_router,
-        prefix="/api/agent",
-    )
+2. Authorized website quantum-security assessment
 
-This prevents accidental routes such as:
+       Agent
+         |
+         v
+   /website-assess
+         |
+         v
+   Website Assessment
+         |
+         +--> TLS
+         +--> Certificate
+         +--> Crypto Inventory
+         +--> Quantum Risk
+         +--> Optional Toy Benchmark
+         +--> Recommendations
 
-    /api/agent/api/agent/assess
+Safety
+------
+
+Website assessment requires explicit authorization and an
+authorized hostname allowlist.
+
+The website workflow does NOT perform:
+
+- authentication bypass
+- credential brute force
+- destructive testing
+- data modification
+- unbounded crawling
+- real-world cryptographic breaking
 """
 
 from __future__ import annotations
@@ -57,9 +62,21 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from qattack.analysis.evidence import evidence_from_result
-from qattack.assessment import QuantumSecurityAssessment
-from qattack.core.target import Target
+from qattack.analysis.evidence import (
+    evidence_from_result,
+)
+
+from qattack.assessment import (
+    QuantumSecurityAssessment,
+)
+
+from qattack.core.target import (
+    Target,
+)
+
+from qattack.web.one_click import (
+    run_one_click_assessment,
+)
 
 
 # =====================================================================
@@ -72,50 +89,126 @@ router = APIRouter(
 
 
 # =====================================================================
-# REQUEST MODEL
+# REQUEST MODELS
 # =====================================================================
 
 
 class AgentAssessmentRequest(BaseModel):
     """
-    Request sent by an AI agent to execute a quantum-security
-    assessment.
-
-    Example
-    -------
-
-    {
-        "target_name": "RSA-Toy-15",
-        "target_type": "rsa",
-        "target_size": 15,
-        "shots": 128,
-        "noise_probability": 0.10
-    }
+    Request for the quantum benchmark assessment tool.
     """
 
     target_name: str = Field(
         default="RSA-Toy-15",
         min_length=1,
-        description="Human-readable target name.",
+        description="Benchmark target name.",
     )
 
     target_type: str = Field(
         default="rsa",
         min_length=1,
-        description="Target type, for example rsa.",
+        description="Benchmark target type.",
     )
 
     target_size: int = Field(
         default=15,
         gt=0,
-        description="Target size used by the benchmark.",
+        description="Benchmark target size.",
     )
 
     shots: int = Field(
         default=128,
         ge=1,
         le=100000,
-        description="Number of measurement shots.",
+        description="Quantum measurement shots.",
+    )
+
+    noise_probability: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="Depolarizing noise probability.",
+    )
+
+
+class AgentWebsiteAssessmentRequest(BaseModel):
+    """
+    Request for the AI-agent website assessment tool.
+
+    Example
+    -------
+
+    {
+        "target_url": "https://zmo-frontend.vercel.app",
+        "authorization_confirmed": true,
+        "run_quantum_benchmark": true,
+        "shots": 128,
+        "noise_probability": 0.10
+    }
+    """
+
+    target_url: str = Field(
+        ...,
+        min_length=8,
+        max_length=2048,
+        description=(
+            "Authorized website URL."
+        ),
+        examples=[
+            "https://zmo-frontend.vercel.app"
+        ],
+    )
+
+    authorization_confirmed: bool = Field(
+        default=False,
+        description=(
+            "Confirm authorization to assess "
+            "the target website."
+        ),
+    )
+
+    timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        le=30,
+        description=(
+            "HTTP/TLS connection timeout."
+        ),
+    )
+
+    max_bytes: int = Field(
+        default=1_000_000,
+        ge=10_000,
+        le=5_000_000,
+        description=(
+            "Maximum response bytes to inspect."
+        ),
+    )
+
+    max_redirects: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description=(
+            "Maximum validated redirects."
+        ),
+    )
+
+    run_quantum_benchmark: bool = Field(
+        default=True,
+        description=(
+            "Run a separate research toy benchmark "
+            "when supported cryptography is detected."
+        ),
+    )
+
+    shots: int = Field(
+        default=128,
+        ge=1,
+        le=100000,
+        description=(
+            "Measurement shots for the toy benchmark."
+        ),
     )
 
     noise_probability: float = Field(
@@ -123,8 +216,7 @@ class AgentAssessmentRequest(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Depolarizing noise probability "
-            "between 0.0 and 1.0."
+            "Depolarizing noise probability."
         ),
     )
 
@@ -134,17 +226,11 @@ class AgentAssessmentRequest(BaseModel):
 # =====================================================================
 
 
-def _json_safe(value: Any) -> Any:
+def _json_safe(
+    value: Any,
+) -> Any:
     """
-    Convert common Python objects into JSON-compatible values.
-
-    Handles:
-
-    - dict
-    - list
-    - tuple
-    - set
-    - NumPy-like scalar objects
+    Convert common Python objects into JSON-safe values.
     """
 
     if isinstance(value, dict):
@@ -162,12 +248,17 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, set):
         return [
             _json_safe(item)
-            for item in sorted(value, key=str)
+            for item in sorted(
+                value,
+                key=str,
+            )
         ]
 
     if hasattr(value, "item"):
         try:
-            return _json_safe(value.item())
+            return _json_safe(
+                value.item()
+            )
         except Exception:
             pass
 
@@ -182,82 +273,89 @@ def _json_safe(value: Any) -> Any:
 @router.get("/capabilities")
 def agent_capabilities() -> dict[str, Any]:
     """
-    Return capabilities available to an AI agent.
-
-    This endpoint allows an agent/orchestrator to discover
-    what this backend can execute.
+    Return machine-readable agent tool capabilities.
     """
 
     return {
         "service": (
             "quantum-security-assessment-agent-gateway"
         ),
-        "version": "0.1.0",
+
+        "version": "0.2.0",
+
         "status": "available",
 
-        "capabilities": [
+        "tools": [
             {
-                "name": "quantum_security_assessment",
+                "name": "quantum_assess",
+
+                "endpoint": (
+                    "/api/agent/assess"
+                ),
+
+                "method": "POST",
+
                 "description": (
-                    "Execute a quantum-security assessment "
-                    "against a supported benchmark target."
+                    "Run a quantum-security "
+                    "research benchmark."
                 ),
             },
+
             {
-                "name": "measurement_analysis",
-                "description": (
-                    "Analyze measurement distributions, "
-                    "dominant states, entropy, and "
-                    "probability mass."
+                "name": "website_quantum_assess",
+
+                "endpoint": (
+                    "/api/agent/website-assess"
                 ),
-            },
-            {
-                "name": "quantum_attack_benchmark",
+
+                "method": "POST",
+
                 "description": (
-                    "Execute the configured quantum attack "
-                    "benchmark and evaluate recovered "
-                    "orders and factors."
-                ),
-            },
-            {
-                "name": "security_evidence",
-                "description": (
-                    "Convert quantum assessment results "
-                    "into structured security evidence."
-                ),
-            },
-            {
-                "name": "machine_readable_result",
-                "description": (
-                    "Return structured JSON suitable for "
-                    "downstream AI-agent reasoning."
+                    "Assess an authorized website's "
+                    "observable security posture, TLS "
+                    "certificate cryptography, quantum "
+                    "risk, and optional toy benchmark."
                 ),
             },
         ],
 
-        "supported_target_types": [
-            "rsa",
+        "website_capabilities": [
+            "https",
+            "tls",
+            "certificate",
+            "certificate_public_key",
+            "crypto_inventory",
+            "quantum_risk_mapping",
+            "security_headers",
+            "cookies",
+            "html_metadata",
+            "toy_quantum_benchmark",
+            "recommendations",
         ],
 
-        "supported_noise_models": [
-            "depolarizing",
+        "not_supported": [
+            "authentication_bypass",
+            "credential_bruteforce",
+            "destructive_testing",
+            "data_modification",
+            "unbounded_crawling",
+            "real_world_cryptographic_break",
         ],
 
-        "execution": {
-            "mode": "synchronous",
-            "persistent_storage": True,
-            "reports": True,
-        },
-
-        "endpoints": {
-            "capabilities": "/api/agent/capabilities",
-            "assessment": "/api/agent/assess",
+        "agent_pattern": {
+            "input": "target + security objective",
+            "processing": (
+                "assessment -> evidence -> decision"
+            ),
+            "output": (
+                "machine-readable structured evidence"
+            ),
         },
     }
 
 
 # =====================================================================
-# AGENT ASSESSMENT
+# QUANTUM BENCHMARK TOOL
 # =====================================================================
 
 
@@ -266,30 +364,10 @@ def agent_assess(
     request: AgentAssessmentRequest,
 ) -> dict[str, Any]:
     """
-    Execute a quantum-security assessment requested by an AI agent.
-
-    Processing pipeline
-    -------------------
-
-    1. Validate request.
-    2. Create Target.
-    3. Execute QuantumSecurityAssessment.
-    4. Analyze measurement results.
-    5. Generate security evidence.
-    6. Extract decision signals.
-    7. Return machine-readable response.
-
-    Note
-    ----
-    This endpoint currently executes the existing assessment
-    engine synchronously. Persistent storage and report generation
-    remain available through the main assessment API.
+    Run the existing quantum-security benchmark.
     """
 
     try:
-        # -------------------------------------------------------------
-        # 1. Build target
-        # -------------------------------------------------------------
 
         target = Target(
             target_type=request.target_type,
@@ -297,37 +375,32 @@ def agent_assess(
             size=request.target_size,
         )
 
-        # -------------------------------------------------------------
-        # 2. Create assessment engine
-        # -------------------------------------------------------------
-
-        assessor = QuantumSecurityAssessment()
-
-        # -------------------------------------------------------------
-        # 3. Execute quantum-security assessment
-        # -------------------------------------------------------------
+        assessor = (
+            QuantumSecurityAssessment()
+        )
 
         result = assessor.run(
             target=target,
             shots=request.shots,
-            noise_probability=request.noise_probability,
+            noise_probability=(
+                request.noise_probability
+            ),
         )
 
-        # -------------------------------------------------------------
-        # 4. Generate security evidence
-        # -------------------------------------------------------------
-
-        evidence = evidence_from_result(result)
-
-        # -------------------------------------------------------------
-        # 5. Convert result into JSON-safe structures
-        # -------------------------------------------------------------
+        evidence = (
+            evidence_from_result(
+                result
+            )
+        )
 
         result_data = _json_safe(
             result.summary()
         )
 
-        if hasattr(evidence, "summary"):
+        if hasattr(
+            evidence,
+            "summary",
+        ):
             evidence_data = _json_safe(
                 evidence.summary()
             )
@@ -336,146 +409,65 @@ def agent_assess(
                 evidence
             )
 
-        # -------------------------------------------------------------
-        # 6. Extract measurement information
-        # -------------------------------------------------------------
+        attack = result_data.get(
+            "attack",
+            {},
+        )
 
         measurement = result_data.get(
             "measurement",
             {},
         )
 
-        # -------------------------------------------------------------
-        # 7. Extract attack information
-        # -------------------------------------------------------------
-
-        attack = result_data.get(
-            "attack",
-            {},
-        )
-
-        recovered_order = attack.get(
-            "recovered_order"
-        )
-
-        order_verified = bool(
-            attack.get(
-                "order_verified",
-                False,
-            )
-        )
-
-        factors = attack.get(
-            "factors",
-            [],
-        )
-
-        expected_order = attack.get(
-            "expected_order"
-        )
-
-        expected_factors = attack.get(
-            "expected_factors",
-            [],
-        )
-
-        # -------------------------------------------------------------
-        # 8. Measurement signals
-        # -------------------------------------------------------------
-
-        dominant_state = measurement.get(
-            "dominant_state"
-        )
-
-        dominant_probability = measurement.get(
-            "dominant_probability"
-        )
-
-        shannon_entropy_bits = measurement.get(
-            "shannon_entropy_bits"
-        )
-
-        normalized_entropy = measurement.get(
-            "normalized_entropy"
-        )
-
-        probability_mass = measurement.get(
-            "probability_mass"
-        )
-
-        probability_mass_error = measurement.get(
-            "probability_mass_error"
-        )
-
-        # -------------------------------------------------------------
-        # 9. Determine agent-facing assessment status
-        # -------------------------------------------------------------
-
-        if order_verified:
-            assessment_status = "verified"
-        else:
-            assessment_status = "not_verified"
-
-        # -------------------------------------------------------------
-        # 10. Build structured agent response
-        # -------------------------------------------------------------
-
         return {
             "status": "completed",
 
-            "agent": {
-                "gateway": "quantum-security-assessment",
-                "execution_mode": "synchronous",
-            },
+            "tool": "quantum_assess",
 
             "assessment": {
-                "target": {
-                    "name": request.target_name,
-                    "type": request.target_type,
-                    "size": request.target_size,
-                },
-
-                "experiment": {
-                    "shots": request.shots,
-                    "noise_model": "depolarizing",
-                    "noise_probability": (
-                        request.noise_probability
-                    ),
-                },
+                "target_name": (
+                    request.target_name
+                ),
+                "target_type": (
+                    request.target_type
+                ),
+                "target_size": (
+                    request.target_size
+                ),
+                "shots": request.shots,
+                "noise_probability": (
+                    request.noise_probability
+                ),
             },
 
             "decision": {
-                "assessment_status": assessment_status,
-
-                "order": {
-                    "recovered": recovered_order,
-                    "verified": order_verified,
-                    "expected": expected_order,
-                },
-
-                "factors": {
-                    "recovered": factors,
-                    "expected": expected_factors,
-                },
-
-                "measurement": {
-                    "dominant_state": dominant_state,
-                    "dominant_probability": (
-                        dominant_probability
-                    ),
-                    "shannon_entropy_bits": (
-                        shannon_entropy_bits
-                    ),
-                    "normalized_entropy": (
-                        normalized_entropy
-                    ),
-                    "probability_mass": (
-                        probability_mass
-                    ),
-                    "probability_mass_error": (
-                        probability_mass_error
-                    ),
-                },
+                "recovered_order": (
+                    attack.get(
+                        "recovered_order"
+                    )
+                ),
+                "order_verified": bool(
+                    attack.get(
+                        "order_verified",
+                        False,
+                    )
+                ),
+                "factors": (
+                    attack.get(
+                        "factors",
+                        [],
+                    )
+                ),
+                "dominant_state": (
+                    measurement.get(
+                        "dominant_state"
+                    )
+                ),
+                "normalized_entropy": (
+                    measurement.get(
+                        "normalized_entropy"
+                    )
+                ),
             },
 
             "result": result_data,
@@ -483,16 +475,14 @@ def agent_assess(
             "evidence": evidence_data,
 
             "agent_message": (
-                "Quantum security assessment completed. "
-                "Structured quantum-security evidence is "
-                "available for downstream agent reasoning."
+                "Quantum benchmark completed "
+                "and structured evidence is ready "
+                "for agent reasoning."
             ),
         }
 
-    except HTTPException:
-        raise
-
     except Exception as exc:
+
         raise HTTPException(
             status_code=500,
             detail={
@@ -503,14 +493,185 @@ def agent_assess(
 
 
 # =====================================================================
-# PUBLIC API
+# WEBSITE QUANTUM ASSESSMENT TOOL
 # =====================================================================
 
+
+@router.post("/website-assess")
+def agent_website_assess(
+    request: AgentWebsiteAssessmentRequest,
+) -> dict[str, Any]:
+    """
+    Perform one-click website quantum-security assessment.
+
+    This endpoint is designed for AI-agent tool calling.
+
+    Example agent request
+    ---------------------
+
+    {
+        "target_url": "https://zmo-frontend.vercel.app",
+        "authorization_confirmed": true,
+        "run_quantum_benchmark": true
+    }
+
+    Output includes:
+
+    - website security posture
+    - TLS information
+    - certificate information
+    - public-key inventory
+    - quantum risk
+    - optional toy benchmark
+    - recommendations
+    - machine-readable decision
+    """
+
+    if not request.authorization_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "authorization_required",
+                "message": (
+                    "The AI agent must explicitly "
+                    "confirm authorization before "
+                    "assessing the website."
+                ),
+            },
+        )
+
+    try:
+
+        result = run_one_click_assessment(
+            request.target_url,
+            authorization_confirmed=(
+                request.authorization_confirmed
+            ),
+            timeout_seconds=(
+                request.timeout_seconds
+            ),
+            max_bytes=(
+                request.max_bytes
+            ),
+            max_redirects=(
+                request.max_redirects
+            ),
+            run_quantum_benchmark=(
+                request.run_quantum_benchmark
+            ),
+            shots=request.shots,
+            noise_probability=(
+                request.noise_probability
+            ),
+        )
+
+        decision = result.get(
+            "decision",
+            {},
+        )
+
+        cryptography = result.get(
+            "cryptography",
+            {},
+        )
+
+        quantum_assessment = result.get(
+            "quantum_assessment",
+            {},
+        )
+
+        return {
+            "status": "completed",
+
+            "tool": "website_quantum_assess",
+
+            "target": result.get(
+                "target",
+                {},
+            ),
+
+            "decision": decision,
+
+            "cryptography": cryptography,
+
+            "quantum_assessment": (
+                quantum_assessment
+            ),
+
+            "recommendations": result.get(
+                "recommendations",
+                [],
+            ),
+
+            "website": result.get(
+                "website",
+                {},
+            ),
+
+            "warnings": result.get(
+                "warnings",
+                [],
+            ),
+
+            "errors": result.get(
+                "errors",
+                [],
+            ),
+
+            "scope": result.get(
+                "scope",
+                {},
+            ),
+
+            "evidence": result.get(
+                "evidence",
+                {},
+            ),
+
+            "agent_message": (
+                "Authorized website quantum-security "
+                "assessment completed. The result contains "
+                "observable website evidence, cryptographic "
+                "inventory, quantum-risk classification, "
+                "and optional research benchmark data."
+            ),
+        }
+
+    except HTTPException:
+        raise
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_agent_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+    except Exception as exc:
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": (
+                    "agent_website_assessment_failed"
+                ),
+                "message": str(exc),
+            },
+        ) from exc
+
+
+# =====================================================================
+# EXPORTS
+# =====================================================================
 
 __all__ = [
     "router",
     "AgentAssessmentRequest",
+    "AgentWebsiteAssessmentRequest",
     "agent_capabilities",
     "agent_assess",
+    "agent_website_assess",
 ]
-
