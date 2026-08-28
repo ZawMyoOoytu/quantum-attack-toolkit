@@ -1,0 +1,46 @@
+[
+  {
+    "model": "depolarizing",
+    "probability": 0.0,
+    "shots": 128,
+    "trials": 20,
+    "successful_trials": 20,
+    "failed_trials": 0,
+    "success_rate": 1.0,
+    "order_recovery_rate": 1.0,
+    "factor_recovery_rate": 1.0
+  },
+  {
+    "model": "depolarizing",
+    "probability": 0.1,
+    "shots": 128,
+    "trials": 20,
+    "successful_trials": 20,
+    "failed_trials": 0,
+    "success_rate": 1.0,
+    "order_recovery_rate": 1.0,
+    "factor_recovery_rate": 1.0
+  },
+  {
+    "model": "depolarizing",
+    "probability": 0.2,
+    "shots": 128,
+    "trials": 20,
+    "successful_trials": 20,
+    "failed_trials": 0,
+    "success_rate": 1.0,
+    "order_recovery_rate": 1.0,
+    "factor_recovery_rate": 1.0
+  },
+  {
+    "model": "depolarizing",
+    "probability": 0.3,
+    "shots": 128,
+    "trials": 20,
+    "successful_trials": 20,
+    "failed_trials": 0,
+    "success_rate": 1.0,
+    "order_recovery_rate": 1.0,
+    "factor_recovery_rate": 1.0
+  }
+]
