@@ -1,0 +1,52 @@
+{
+  "attack": "shor",
+  "circuit_depth": 1393,
+  "elapsed_seconds": 0.30169609999938984,
+  "gate_count": 1927,
+  "logical_qubits": 8,
+  "metrics": {
+    "N": 15,
+    "a": 2,
+    "candidate_orders": [
+      4,
+      1,
+      2
+    ],
+    "counts": {
+      "0000": 244,
+      "0100": 261,
+      "1000": 239,
+      "1100": 280
+    },
+    "expected_order": 4,
+    "factors": [
+      3,
+      5
+    ],
+    "method": "quantum-period-finding-benchmark",
+    "order_verified": true,
+    "phases": [
+      0.75,
+      0.25,
+      0.0,
+      0.5
+    ],
+    "recovered_order": 4
+  },
+  "notes": [
+    "Circuit executed using Qiskit Aer.",
+    "Controlled modular powers were generated as U^(2^j) for QPE.",
+    "Measurement results were converted into phases.",
+    "Continued-fraction denominators generated candidate orders.",
+    "Candidate orders were classically verified.",
+    "Factors were derived only after valid order recovery.",
+    "This is an N=15 research benchmark.",
+    "No real cryptographic key was accessed."
+  ],
+  "shots": 1024,
+  "size": 15,
+  "success": true,
+  "success_probability": 1.0,
+  "target": "RSA-Toy-15",
+  "target_type": "rsa"
+}

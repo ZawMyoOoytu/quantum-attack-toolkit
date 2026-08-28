@@ -1,0 +1,5 @@
+attack,target,target_type,size,shots,trials,successful_trials,failed_trials,success_rate,order_recovery_rate,factor_recovery_rate,mean_elapsed_seconds
+shor,RSA-Toy-15,rsa,15,128,10,10,0,1.0,1.0,1.0,0.298713069999576
+shor,RSA-Toy-15,rsa,15,256,10,10,0,1.0,1.0,1.0,0.29760236000038276
+shor,RSA-Toy-15,rsa,15,512,10,10,0,1.0,1.0,1.0,0.2987300100001448
+shor,RSA-Toy-15,rsa,15,1024,10,10,0,1.0,1.0,1.0,0.29980060999987473

@@ -1,0 +1,37 @@
+Quantum Attack Toolkit Benchmark
+========================================
+Attack:              shor
+Target:              RSA-Toy-15
+Target type:         rsa
+Size:                15
+Success:             True
+Logical qubits:      8
+Circuit depth:       1393
+Gate count:          1927
+Shots:               1024
+Success probability:  1.0000
+Elapsed seconds:     0.301696
+
+Metrics
+----------------------------------------
+N: 15
+a: 2
+counts: {'1100': 280, '0100': 261, '0000': 244, '1000': 239}
+phases: [0.75, 0.25, 0.0, 0.5]
+candidate_orders: [4, 1, 2]
+recovered_order: 4
+order_verified: True
+factors: (3, 5)
+expected_order: 4
+method: quantum-period-finding-benchmark
+
+Notes
+----------------------------------------
+- Circuit executed using Qiskit Aer.
+- Controlled modular powers were generated as U^(2^j) for QPE.
+- Measurement results were converted into phases.
+- Continued-fraction denominators generated candidate orders.
+- Candidate orders were classically verified.
+- Factors were derived only after valid order recovery.
+- This is an N=15 research benchmark.
+- No real cryptographic key was accessed.
